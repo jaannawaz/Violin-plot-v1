@@ -1,26 +1,33 @@
-   @echo off
-   REM Find Rscript in the system PATH
-   for %%i in (Rscript.exe) do set R_PATH=%%~$PATH:i
+@echo off
 
-   REM Check if Rscript exists
-   if not defined R_PATH (
-       echo R is not installed or Rscript.exe is not in the PATH. Please install R first.
-       pause
-       exit /b
-   )
+REM Locate R.exe dynamically in the default installation directory
+set "R_PATH="
+for /d %%d in ("C:\Program Files\R\R-*") do (
+    if exist "%%d\bin\R.exe" (
+        set "R_PATH=%%d\bin\R.exe"
+        goto :found
+    )
+)
 
-   REM Install R libraries if not already installed
-   echo Installing required R packages...
-   "%R_PATH%" -e "if (!requireNamespace('ggplot2', quietly = TRUE)) install.packages('ggplot2', repos='http://cran.r-project.org')"
-   "%R_PATH%" -e "if (!requireNamespace('ggpubr', quietly = TRUE)) install.packages('ggpubr', repos='http://cran.r-project.org')"
-   "%R_PATH%" -e "if (!requireNamespace('rstatix', quietly = TRUE)) install.packages('rstatix', repos='http://cran.r-project.org')"
+:found
+if "%R_PATH%"=="" (
+    echo R is not installed or R.exe is not in the default directory.
+    echo Please install R or specify the path manually.
+    pause
+    exit /b
+)
 
-   REM Start the Shiny app located in the same directory as the batch file
-   set APP_PATH=%~dp0app.R
-   start "" "%R_PATH%" -e "shiny::runApp('%APP_PATH%')"
+echo Found R.exe at: %R_PATH%
 
-   REM Open the default web browser to the R documentation
-   start "" "https://cran.r-project.org/manuals.html"
+REM Check and install only missing libraries
+echo Checking and installing required R libraries...
+"%R_PATH%" -e "required_packages <- c('shiny', 'dplyr', 'ggplot2', 'ggpubr'); missing_packages <- setdiff(required_packages, installed.packages()[,'Package']); if(length(missing_packages)) install.packages(missing_packages, repos='http://cran.rstudio.com/')"
 
-   echo Installation of R packages complete. Press any key to exit.
-   pause
+REM Start the Shiny app directly
+echo Starting the Shiny app...
+"%R_PATH%" -e "shiny::runApp('app.R', launch.browser = TRUE)"
+
+REM Pause to keep the terminal open
+echo.
+echo Shiny app has started. Press any key to exit.
+pause
