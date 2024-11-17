@@ -41,14 +41,8 @@ ui <- fluidPage(
                            "Kruskal-Wallis (multi groups)" = "kruskal"
                        )),
             
-            # Comparison pairs
-            checkboxGroupInput("comparisons", "Select comparisons:",
-                             choices = c(
-                                 "low vs middle" = "low_middle",
-                                 "middle vs high" = "middle_high",
-                                 "low vs high" = "low_high"
-                             ),
-                             selected = c("low_middle", "middle_high", "low_high")),
+            # Dynamic comparison pairs
+            uiOutput("comparison_ui"),
             
             # Download button
             downloadButton("downloadPlot", "Download Plot (PNG)")
@@ -62,29 +56,41 @@ ui <- fluidPage(
 )
 
 # Define server logic
-server <- function(input, output) {
+server <- function(input, output, session) {
+    
+    # Reactive expression to read data and identify columns
+    data_reactive <- reactive({
+        req(input$file)
+        data <- read.csv(input$file$datapath)
+        list(data = data, condition_col = names(data)[1], value_col = names(data)[2])
+    })
+    
+    # Update comparison pairs based on the uploaded data
+    output$comparison_ui <- renderUI({
+        req(data_reactive())
+        data <- data_reactive()$data
+        condition_col <- data_reactive()$condition_col
+        
+        # Get unique groups
+        unique_groups <- unique(data[[condition_col]])
+        
+        # Create comparison pairs
+        comparisons <- combn(unique_groups, 2, simplify = FALSE)
+        comparison_choices <- sapply(comparisons, function(x) paste(x, collapse = " vs "))
+        
+        checkboxGroupInput("comparisons", "Select comparisons:", choices = comparison_choices)
+    })
     
     # Create the violin plot
     plot_violin <- reactive({
-        req(input$file)
+        req(data_reactive())
         
-        data <- read.csv(input$file$datapath)
-        
-        # Create comparison list
-        comparisons <- list()
-        if("low_middle" %in% input$comparisons) comparisons[[length(comparisons) + 1]] <- c("low", "middle")
-        if("middle_high" %in% input$comparisons) comparisons[[length(comparisons) + 1]] <- c("middle", "high")
-        if("low_high" %in% input$comparisons) comparisons[[length(comparisons) + 1]] <- c("low", "high")
-        
-        # Statistical test method
-        test_method <- switch(input$stat_method,
-                            "t.test" = "t.test",
-                            "wilcox.test" = "wilcox.test",
-                            "anova" = "anova",
-                            "kruskal" = "kruskal.test")
+        data <- data_reactive()$data
+        condition_col <- data_reactive()$condition_col
+        value_col <- data_reactive()$value_col
         
         # Create plot
-        p <- ggviolin(data, x = "condition", y = "len", fill = "condition",
+        p <- ggviolin(data, x = condition_col, y = value_col, fill = condition_col,
                      add = "boxplot", 
                      add.params = list(fill = "white")) +
             scale_fill_manual(values = c(
@@ -103,17 +109,14 @@ server <- function(input, output) {
             ylim(input$y_min, input$y_max)
         
         # Add statistical comparisons
-        if(length(comparisons) > 0) {
+        if(length(input$comparisons) > 0) {
+            comparisons <- strsplit(input$comparisons, " vs ")
+            comparisons <- lapply(comparisons, function(x) x)
             p <- p + stat_compare_means(
                 comparisons = comparisons,
-                method = test_method,
+                method = input$stat_method,
                 label = "p.format"
             )
-        }
-        
-        # Add overall p-value for ANOVA or Kruskal-Wallis
-        if(input$stat_method %in% c("anova", "kruskal")) {
-            p <- p + stat_compare_means(method = test_method)
         }
         
         p
@@ -140,38 +143,46 @@ server <- function(input, output) {
     
     # Display statistical test results
     output$statTest <- renderPrint({
-        req(input$file)
-        data <- read.csv(input$file$datapath)
+        req(data_reactive())
+        data <- data_reactive()$data
+        condition_col <- data_reactive()$condition_col
+        value_col <- data_reactive()$value_col
         
         cat("Statistical Analysis Results:\n\n")
         
         # Perform statistical test based on selection
         if(input$stat_method == "t.test" || input$stat_method == "wilcox.test") {
             for(comp in input$comparisons) {
-                groups <- strsplit(comp, "_")[[1]]
-                test_data <- subset(data, condition %in% groups)
+                groups <- strsplit(comp, " vs ")[[1]]
                 
-                if(input$stat_method == "t.test") {
-                    result <- t.test(len ~ condition, data = test_data)
+                # Check if both groups exist in the data
+                if (all(groups %in% unique(data[[condition_col]])) && length(groups) == 2) {
+                    test_data <- subset(data, data[[condition_col]] %in% groups)
+                    
+                    if(input$stat_method == "t.test") {
+                        result <- t.test(data[[value_col]] ~ data[[condition_col]], data = test_data)
+                    } else {
+                        result <- wilcox.test(data[[value_col]] ~ data[[condition_col]], data = test_data)
+                    }
+                    
+                    cat("\nComparison:", paste(groups, collapse = " vs "), "\n")
+                    print(result)
                 } else {
-                    result <- wilcox.test(len ~ condition, data = test_data)
+                    cat("\nComparison:", paste(groups, collapse = " vs "), " - Not enough data\n")
                 }
-                
-                cat("\nComparison:", paste(groups, collapse = " vs "), "\n")
-                print(result)
             }
         } else if(input$stat_method == "anova") {
-            result <- aov(len ~ condition, data = data)
+            result <- aov(data[[value_col]] ~ data[[condition_col]], data = data)
             print(summary(result))
             # Add Tukey post-hoc test
             cat("\nTukey Post-hoc Test:\n")
             print(TukeyHSD(result))
         } else if(input$stat_method == "kruskal") {
-            result <- kruskal.test(len ~ condition, data = data)
+            result <- kruskal.test(data[[value_col]] ~ data[[condition_col]], data = data)
             print(result)
             # Add Dunn's test
             cat("\nDunn's Post-hoc Test:\n")
-            print(dunn_test(data, len ~ condition, p.adjust.method = "bonferroni"))
+            print(dunn_test(data, data[[value_col]] ~ data[[condition_col]], p.adjust.method = "bonferroni"))
         }
     })
 }
